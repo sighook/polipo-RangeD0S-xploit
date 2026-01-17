@@ -1,100 +1,109 @@
-Polipo malformed Range header denial of service
-===============================================
+# Polipo malformed Range header vulnerabilities
 
-Summary
--------
+## Overview
 
-This repository contains a small proof-of-concept demonstrating a
-denial-of-service condition in **Polipo**, a lightweight caching web
-proxy.  The issue is triggered by a malformed `Range` header, which
-leads to an assertion failure and process termination.
+This repository documents issues in **Polipo**, a lightweight caching
+web proxy, related to incorrect handling of malformed HTTP `Range`
+headers.  The same input class exposes two distinct failure modes,
+tracked under separate CVEs due to their different impact.
 
-The behavior is tracked under the following CVEs:
+Polipo is effectively unmaintained, but the affected code remains
+relevant for historical analysis and for understanding common failure
+patterns in HTTP parsing logic.
 
-- CVE-2020-36420
-- CVE-2021-38614
+Associated CVEs:
 
-The issue affects all known Polipo versions, as the assertion is
-present in the common request-handling code path.
+* CVE-2020-36420
+* CVE-2021-38614
 
-Technical background
---------------------
+## Technical summary
 
-Polipo does not correctly validate `Range` headers before using their
-values.  When presented with an invalid range where the end offset is
-smaller than the start offset, for example:
+Polipo does not consistently validate byte ranges before using them in
+later processing stages.  When presented with an invalid range such
+as:
 
 ```
 Range: bytes=3-2
 ```
 
-the proxy evaluates the following assertion in `server.c`:
+internal assumptions about ordering and size are violated.  Depending
+on the execution path, this results in either an assertion failure or
+a memory safety violation.
+
+### CVE-2020-36420: assertion-triggered denial of service
+
+In one code path, Polipo evaluates the following assertion in
+`server.c`:
 
 ```c
 assert(from >= 0 && (to < 0 || to > from));
 ```
 
-Since the condition is violated, Polipo aborts immediately.
-This results in a reliable denial-of-service without authentication.
+For malformed ranges where `to < from`, this assertion fails and the
+process aborts immediately.  This is a reliable, remote,
+unauthenticated denial of service.
 
-Proof of concept
-----------------
+### CVE-2021-38614: heap buffer overflow
 
-The included Perl script opens a TCP connection to the target Polipo
-instance and sends a minimal HTTP request containing the malformed
-`Range` header.  No special libraries or frameworks are used; the
-script relies on raw sockets to keep the behavior explicit and easy to
-reason about.
+In a separate code path, the same class of malformed input leads to
+inconsistent buffer sizing.  A heap buffer is allocated based on one
+interpretation of the range, then written past its boundary during
+later processing.
 
-The intent of the PoC is to demonstrate:
+When built with AddressSanitizer, this manifests as a heap buffer
+overflow:
 
-- Awareness of HTTP request parsing behavior
-- Identification of missing input validation
-- Understanding of how assertion failures translate into availability
-  issues
+* write past the end of a heap allocation
+* immediate abort under sanitizers
+* silent memory corruption on non-sanitized builds
 
-Usage
------
+While no practical code execution vector is demonstrated, this is a
+genuine memory safety violation and therefore tracked as a distinct
+CVE.
+
+## Proof of concept
+
+The included Perl script demonstrates the malformed `Range` header
+trigger using a minimal raw TCP client.  It is intentionally simple
+and avoids frameworks in order to keep the behavior explicit and
+reproducible.
+
+Usage:
 
 ```sh
 perl polipo-range-dos.pl <host> <port>
 ```
 
-Example:
+If the request is processed, the Polipo process will terminate due to
+either an assertion failure or memory corruption, depending on build
+configuration and execution path.
 
-```sh
-perl polipo-range-dos.pl 127.0.0.1 8123
-```
+## Impact
 
-If the request is processed, the Polipo process terminates due to the
-failed assertion.
+* Remote, unauthenticated denial of service
+* Process termination
+* Potential heap memory corruption (CVE-2021-38614)
 
-Impact
-------
+No authentication or special configuration is required beyond access
+to the listening proxy port.
 
-- Remote, unauthenticated denial of service
-- Immediate termination of the Polipo proxy process
-- Service requires restart or supervision to recover
+## Notes on mitigation
 
-There is no memory corruption or code execution involved.
+Polipo is no longer actively maintained. Practical mitigations
+include:
 
-Notes on mitigation
--------------------
+* Replacing Polipo with a maintained proxy implementation
+* Filtering malformed `Range` headers upstream
+* Applying downstream patches, where available
 
-Polipo is effectively unmaintained.  Practical mitigations include
-replacing it with a maintained proxy or filtering malformed `Range`
-headers upstream.  Some downstream distributions may carry defensive
-patches.
+## Scope and intent
 
-Legal and ethical note
-----------------------
+This repository is provided for documentation, analysis, and defensive
+security research.  It is intended to illustrate how insufficient
+input validation can lead to both logic-level failures and memory
+safety issues.
 
-This code is provided for documentation, research, and defensive
-security work.  It should only be used against systems you own or have
-permission to test.
-
-Author
-------
+## Author
 
 Alexandr Savca
-<mailto:alexandr.savca89@gmail.com>
+[alexandr.savca89@gmail.com](mailto:alexandr.savca89@gmail.com)
